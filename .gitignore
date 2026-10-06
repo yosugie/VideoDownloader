@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Секреты и локальные настройки
+.env
+*.env
+!.env.example
+cookies.txt
+cookies/
+*.cookies
+
+# Временные файлы загрузок
+downloads/
+
+# База учёта загрузок: она живёт на сервере и в репозиторий не ездит
+*.db
+*.sqlite
+*.sqlite3
+*.part
+*.ytdl
+
+# IDE / ОС
+.idea/
+.vscode/
+.DS_Store

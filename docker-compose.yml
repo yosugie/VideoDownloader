@@ -1,0 +1,16 @@
+services:
+  bot:
+    build: .
+    container_name: videodownloader
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Временные файлы загрузок — чтобы не раздувать слой контейнера
+      - ./downloads:/app/downloads
+      # Раскомментируйте, если используете cookies для Instagram:
+      # - ./cookies.txt:/app/cookies.txt:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

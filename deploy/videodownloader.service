@@ -1,0 +1,64 @@
+# systemd-юнит для VideoDownloader.
+#
+# Бот только ходит наружу: он не слушает порты, не трогает маршруты и
+# не меняет правила файрвола. Поэтому на сервере, который работает как
+# VPN, его можно держать рядом, ничего не ломая.
+#
+# Установка описана в DEPLOY.md.
+
+[Unit]
+Description=VideoDownloader Telegram bot
+Documentation=https://github.com/yosugie/VideoDownloader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=videobot
+Group=videobot
+WorkingDirectory=/opt/videobot/app
+ExecStart=/opt/videobot/app/.venv/bin/python -m bot
+
+# Логи должны появляться сразу, а не ждать заполнения буфера
+Environment=PYTHONUNBUFFERED=1
+
+# Упал — поднимаем. Сеть моргнула, Telegram отвалился: это норма.
+Restart=always
+RestartSec=10
+
+# ── Приоритет: бот уступает дорогу ──────────────────────────────────
+# На сервере, где главная задача — другая служба, бот не должен за неё
+# бороться. Перекодирование видео занимает процессор целиком, и VPN
+# начинает подтормаживать именно из-за этого, а не из-за канала.
+#
+# Nice снижает приоритет процессов бота, CPUWeight и IOWeight отдают
+# ему меньшую долю при споре за процессор и диск. Когда сервер свободен,
+# бот работает в полную силу: ограничения действуют только в момент
+# нехватки.
+Nice=10
+CPUWeight=30
+IOWeight=30
+
+# Память ограничена, чтобы при нескольких тяжёлых загрузках система не
+# осталась без неё. MemoryHigh придерживает рост, MemoryMax — жёсткий
+# предел. Пусть лучше сорвётся одна загрузка, чем упадёт всё остальное.
+MemoryHigh=800M
+MemoryMax=1200M
+
+# ── Ограничения прав ────────────────────────────────────────────────
+# Боту нужна запись только в свой каталог, остальная система ему
+# доступна лишь на чтение.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/videobot/app
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

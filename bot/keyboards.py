@@ -21,6 +21,38 @@ class AccessDecision(CallbackData, prefix="acc"):
     user_id: int
 
 
+class MemberAction(CallbackData, prefix="mem"):
+    """Что владелец делает с человеком из списка допущенных."""
+
+    action: str
+    user_id: int
+
+
+def manage_member(
+    user_id: int, profile_url: str | None, *, blocked: bool = False
+) -> InlineKeyboardMarkup:
+    """Убрать человека из списка, а заблокированного — вернуть.
+
+    Возврат нужен, чтобы блокировка не была тупиком: записи нет —
+    человек снова может подать заявку.
+    """
+    builder = InlineKeyboardBuilder()
+    drop = MemberAction(action="drop", user_id=user_id).pack()
+    if blocked:
+        builder.row(InlineKeyboardButton(text="↩️ Разблокировать", callback_data=drop))
+    else:
+        builder.row(
+            InlineKeyboardButton(text="❌ Исключить", callback_data=drop),
+            InlineKeyboardButton(
+                text="🚫 Заблокировать",
+                callback_data=MemberAction(action="block", user_id=user_id).pack(),
+            ),
+        )
+    if profile_url:
+        builder.row(InlineKeyboardButton(text="👤 Профиль", url=profile_url))
+    return builder.as_markup()
+
+
 def decide_access(user_id: int, profile_url: str | None) -> InlineKeyboardMarkup:
     """Принять, отклонить и заглянуть в профиль."""
     builder = InlineKeyboardBuilder()

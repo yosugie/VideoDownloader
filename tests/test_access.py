@@ -11,6 +11,9 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
+from bot.config import Settings
+from bot.handlers.access import manage
+from bot.keyboards import MemberAction
 from bot.middlewares.access import AccessMiddleware
 from bot.services.access import APPROVED, BLOCKED, PENDING, Registry
 from tests.test_downloader import make_settings
@@ -53,7 +56,7 @@ def a_message(text: str) -> Message:
 
 
 def a_press(data: str) -> CallbackQuery:
-    press = CallbackQuery.model_construct(id="1", data=data)
+    press = CallbackQuery.model_construct(id="1", data=data, from_user=FakeUser(OWNER))
     said: list[str] = []
 
     async def answer(text: str = "", **kwargs: object) -> None:
@@ -437,3 +440,78 @@ def test_the_gate_stands_outside_the_filters(dispatcher: Dispatcher) -> None:
         inner = [type(m).__name__ for m in observer.middleware]
         assert "AccessMiddleware" in outer
         assert "AccessMiddleware" not in inner
+
+
+# ── список допущенных ──────────────────────────────────────────────────
+
+
+def a_card(user_id: int, action: str) -> CallbackQuery:
+    """Нажатие кнопки на карточке человека."""
+    return a_press(MemberAction(action=action, user_id=user_id).pack())
+
+
+def _handle(event: CallbackQuery, settings: Settings, registry: Registry) -> None:
+    data = MemberAction.unpack(event.data or "")
+    asyncio.run(manage(event, callback_data=data, settings=settings, registry=registry))
+
+
+def owner_and(tmp_path: Path, *user_ids: int) -> tuple[Settings, Registry]:
+    """Владелец, список и уже допущенные люди."""
+    settings = make_settings(tmp_path, admin_ids=frozenset({OWNER}))
+    registry = registry_at(tmp_path)
+    registry.seed(frozenset({OWNER}))
+    for user_id in user_ids:
+        registry.ask(user_id, None, f"Человек {user_id}")
+        registry.approve(user_id, by=OWNER)
+    return settings, registry
+
+
+def test_a_person_can_be_dropped(tmp_path: Path) -> None:
+    """Исключённый уходит из списка и может подать заявку заново."""
+    settings, registry = owner_and(tmp_path, STRANGER)
+    press = a_card(STRANGER, "drop")
+
+    _handle(press, settings, registry)
+
+    assert registry.get(STRANGER) is None
+    assert "Исключён" in press.said[0]
+
+
+def test_a_person_can_be_blocked(tmp_path: Path) -> None:
+    settings, registry = owner_and(tmp_path, STRANGER)
+
+    _handle(a_card(STRANGER, "block"), settings, registry)
+
+    member = registry.get(STRANGER)
+    assert member is not None and member.status == BLOCKED
+
+
+def test_a_blocked_person_can_be_let_back(tmp_path: Path) -> None:
+    """Иначе блокировка была бы тупиком без выхода."""
+    settings, registry = owner_and(tmp_path, STRANGER)
+    registry.block(STRANGER, by=OWNER)
+
+    _handle(a_card(STRANGER, "drop"), settings, registry)
+
+    assert registry.get(STRANGER) is None
+
+
+def test_an_admin_cannot_be_dropped(tmp_path: Path) -> None:
+    settings, registry = owner_and(tmp_path)
+
+    _handle(a_card(OWNER, "drop"), settings, registry)
+
+    member = registry.get(OWNER)
+    assert member is not None and member.allowed
+
+
+def test_only_an_admin_may_press_the_card(tmp_path: Path) -> None:
+    """Кнопка могла уехать пересылкой кому угодно."""
+    settings, registry = owner_and(tmp_path, STRANGER)
+    press = a_card(STRANGER, "drop")
+    object.__setattr__(press, "from_user", FakeUser(STRANGER))
+
+    _handle(press, settings, registry)
+
+    assert registry.allowed(STRANGER), "допущенный сам себя не исключает"
+    assert "владелец" in press.said[0]

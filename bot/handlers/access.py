@@ -19,8 +19,15 @@ from aiogram.filters import Command, CommandStart, Filter
 from aiogram.types import CallbackQuery, Message, TelegramObject, User
 
 from bot.config import Settings
-from bot.keyboards import AccessDecision, decide_access
-from bot.services.access import Member, Registry, is_allowed
+from bot.keyboards import AccessDecision, MemberAction, decide_access, manage_member
+from bot.services.access import (
+    APPROVED,
+    BLOCKED,
+    PENDING,
+    Member,
+    Registry,
+    is_allowed,
+)
 
 log = logging.getLogger(__name__)
 
@@ -159,7 +166,125 @@ async def pending_requests(
         )
 
 
+#: Карточек в списке за раз: дальше это уже не список, а простыня.
+MEMBERS_SHOWN = 20
+
+
+@router.message(Command("users"))
+async def members(
+    message: Message,
+    settings: Settings,
+    registry: Registry,
+) -> None:
+    """Все допущенные и кнопки, чтобы убрать лишнего."""
+    user = message.from_user
+    if user is None or not settings.is_admin(user.id):
+        return
+
+    people = registry.approved(limit=MEMBERS_SHOWN + 1)
+    blocked = registry.blocked_people(limit=MEMBERS_SHOWN)
+    await message.answer(_members_header(registry.counts(), shown=len(people)))
+
+    for member in people[:MEMBERS_SHOWN]:
+        # Администратора убрать нельзя: доступ у него от настроек,
+        # и запись в списке ничего не решает.
+        own = settings.is_admin(member.user_id)
+        await message.answer(
+            _member_text(member, owner=own, me=member.user_id == user.id),
+            reply_markup=None if own else manage_member(member.user_id, member.profile_url),
+        )
+
+    for member in blocked:
+        await message.answer(
+            _member_text(member),
+            reply_markup=manage_member(member.user_id, member.profile_url, blocked=True),
+        )
+
+
+@router.callback_query(MemberAction.filter())
+async def manage(
+    callback: CallbackQuery,
+    callback_data: MemberAction,
+    settings: Settings,
+    registry: Registry,
+) -> None:
+    """Исключает, блокирует или возвращает человека."""
+    user = callback.from_user
+    if not settings.is_admin(user.id):
+        await callback.answer("Это решает владелец бота.", show_alert=True)
+        return
+
+    target = callback_data.user_id
+    if settings.is_admin(target):
+        await callback.answer("Администратора убрать нельзя.", show_alert=True)
+        return
+
+    member = registry.get(target)
+    if member is None:
+        await callback.answer("Этого человека в списке уже нет.", show_alert=True)
+        return
+
+    if callback_data.action == "block":
+        registry.block(target, by=user.id)
+        mark = "🚫 Заблокирован"
+    else:
+        was_blocked = member.status == BLOCKED
+        registry.forget(target)
+        mark = "↩️ Разблокирован" if was_blocked else "❌ Исключён"
+
+    await callback.answer(mark)
+    log.info("%s: id=%s решил id=%s", mark, target, user.id)
+
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(TelegramBadRequest):
+            await callback.message.edit_text(
+                f"{mark}\n\n{member.mention}\nID: <code>{member.user_id}</code>",
+                reply_markup=None,
+            )
+
+
 # ── отправка ─────────────────────────────────────────────────────────
+
+
+def _members_header(counts: dict[str, int], *, shown: int) -> str:
+    """Сколько людей в списке и что ещё требует внимания."""
+    total = counts.get(APPROVED, 0)
+    lines = [f"👥 <b>Допущено человек: {total}</b>"]
+    if shown > MEMBERS_SHOWN:
+        lines.append(f"Показаны первые {MEMBERS_SHOWN}.")
+    waiting = counts.get(PENDING, 0)
+    if waiting:
+        lines.append(f"📨 Заявок ждёт решения: {waiting} — /requests")
+    stopped = counts.get(BLOCKED, 0)
+    if stopped:
+        lines.append(f"🚫 Заблокированы: {stopped} — ниже списком")
+    if total == 0 and not waiting:
+        lines.append("")
+        lines.append("Пока никого. Заявки придут сюда сами.")
+    return "\n".join(lines)
+
+
+def _member_text(member: Member, *, owner: bool = False, me: bool = False) -> str:
+    """Карточка человека из списка.
+
+    У администратора имени может не быть вовсе: в список он попадает
+    посевом из настроек, а не заявкой, и `mention` отдал бы его же ID
+    второй раз.
+    """
+    if owner and not (member.full_name or member.username):
+        name = "⭐ Вы" if me else "⭐ Администратор"
+    else:
+        name = ("⭐ " if owner else "") + member.mention
+    lines = [
+        ("🚫 " if member.status == BLOCKED else "") + name,
+        f"ID: <code>{member.user_id}</code>",
+    ]
+    if member.decided_at:
+        when = escape(member.decided_at.replace("T", " ")[:16])
+        lines.append(("Заблокирован: " if member.status == BLOCKED else "Допущен: ") + when)
+    if owner:
+        lines.append("Администратор — убрать нельзя")
+    return "\n".join(lines)
 
 
 def _request_text(member: Member) -> str:

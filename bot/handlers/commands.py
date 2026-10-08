@@ -163,7 +163,7 @@ def status_text(
             f"Людей за сегодня: {quota.users_today()}",
         ]
         if people:
-            lines.append(f"Допущено человек: {people.get('approved', 0)}")
+            lines.append(f"Допущено человек: {people.get('approved', 0)} — /users")
             waiting = people.get("pending", 0)
             if waiting:
                 lines.append(f"⚠️ Заявок ждёт решения: {waiting} — /requests")

@@ -113,19 +113,24 @@ class Registry:
         member = self.get(user_id)
         return member is not None and member.status == BLOCKED
 
-    def pending(self, limit: int = 20) -> list[Member]:
+    def by_status(self, status: str, limit: int = 100) -> list[Member]:
+        """Люди в одном состоянии: заявки по времени заявки, решённые — по решению."""
+        order = "asked_at" if status == PENDING else "decided_at"
         rows = self._query(
-            "SELECT * FROM members WHERE status = ? ORDER BY asked_at LIMIT ?",
-            (PENDING, limit),
+            # Порядок — из двух строк выше, не из ввода.
+            f"SELECT * FROM members WHERE status = ? ORDER BY {order} LIMIT ?",
+            (status, limit),
         )
         return [_member(row) for row in rows]
 
+    def pending(self, limit: int = 20) -> list[Member]:
+        return self.by_status(PENDING, limit)
+
     def approved(self, limit: int = 100) -> list[Member]:
-        rows = self._query(
-            "SELECT * FROM members WHERE status = ? ORDER BY decided_at LIMIT ?",
-            (APPROVED, limit),
-        )
-        return [_member(row) for row in rows]
+        return self.by_status(APPROVED, limit)
+
+    def blocked_people(self, limit: int = 100) -> list[Member]:
+        return self.by_status(BLOCKED, limit)
 
     def counts(self) -> dict[str, int]:
         rows = self._query("SELECT status, COUNT(*) AS n FROM members GROUP BY status")

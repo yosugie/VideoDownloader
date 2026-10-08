@@ -4,9 +4,9 @@
 спрашивает его на каждом событии, а не держит копию у себя. Из настроек
 берутся только те, кто допущен изначально, и чёрный список.
 
-Гостю оставлены ровно два действия — команда ``/start`` и кнопка заявки
-под ней. Всё остальное для него закрыто: иначе заявка была бы не входом,
-а формальностью.
+Гостю оставлена ровно одна дорога — команда ``/start``, она же заявка.
+Всё остальное для него закрыто: иначе заявка была бы не входом, а
+формальностью.
 """
 
 from __future__ import annotations
@@ -19,26 +19,41 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject, User
 
 from bot.config import Settings
-from bot.keyboards import AccessRequest
-from bot.services.access import Registry
+from bot.services.access import Registry, gated, is_allowed, is_blocked
 
 log = logging.getLogger(__name__)
 
-_GUEST_HINT = (
+_PRIVATE = (
+    "🔒 <b>Личный бот</b>\n\n"
+    "Им пользуется ограниченный круг людей."
+)
+_INVITE = (
     "🔒 <b>Бот работает по заявкам</b>\n\n"
-    "Нажмите /start, чтобы отправить заявку владельцу."
+    "Отправьте /start — я передам заявку владельцу."
+)
+_WAITING = (
+    "⏳ <b>Заявка ждёт решения</b>\n\n"
+    "Владелец её ещё не рассмотрел. Как решит — я напишу сюда."
+)
+_REJECTED = (
+    "❌ <b>Доступ закрыт</b>\n\n"
+    "Владелец отклонил заявку. Если это недоразумение, "
+    "отправьте её заново: /start"
 )
 
 
 class AccessMiddleware(BaseMiddleware):
-    """Решает, пускать ли человека дальше."""
+    """Решает, пускать ли человека дальше.
+
+    Подключается ВНЕШНИМ middleware (``outer_middleware``). Внутренний
+    aiogram запускает уже после фильтров, и фильтр гостя не увидел бы
+    решения: гость уезжал бы в обычное приветствие, а потом получал
+    отказ на ссылку — замкнутый круг.
+    """
 
     def __init__(self, settings: Settings, registry: Registry) -> None:
         self._settings = settings
         self._registry = registry
-        #: Заявки принимает администратор. Если его нет, принимать их
-        #: некому, и бот ведёт себя по-старому — по списку из настроек.
-        self._gated = bool(settings.admin_ids)
 
     async def __call__(
         self,
@@ -50,53 +65,43 @@ class AccessMiddleware(BaseMiddleware):
         if user is None:
             return await handler(event, data)
 
-        if self._is_blocked(user.id):
+        if is_blocked(self._settings, self._registry, user.id):
             log.warning("Заблокированный пользователь: id=%s", user.id)
             return None
 
-        member = self._registry.get(user.id)
-        data["member"] = member
-        data["is_member"] = allowed = self._is_allowed(user.id, member)
-
-        if allowed:
+        if is_allowed(self._settings, self._registry, user.id):
             return await handler(event, data)
 
-        if self._gated and _is_guest_action(event):
+        if gated(self._settings) and _is_guest_action(event):
             return await handler(event, data)
 
         log.info("Не допущен: id=%s username=%s", user.id, user.username)
-        await self._deny(event)
+        await self._deny(event, user)
         return None
 
-    # ── правила ──────────────────────────────────────────────────────
-
-    def _is_blocked(self, user_id: int) -> bool:
-        return user_id in self._settings.blocked_user_ids or self._registry.blocked(user_id)
-
-    def _is_allowed(self, user_id: int, member: object) -> bool:
-        if user_id in self._settings.admin_ids:
-            return True
-        if getattr(member, "allowed", False):
-            return True
-        if self._gated:
-            return False
-        # Без администратора список из настроек работает как прежде,
-        # а пустой список означает «бот открыт для всех».
-        allowed = self._settings.allowed_user_ids
-        return not allowed or user_id in allowed
-
-    async def _deny(self, event: TelegramObject) -> None:
+    async def _deny(self, event: TelegramObject, user: User) -> None:
+        text = self._denial(user)
         if isinstance(event, Message):
-            await event.answer(_GUEST_HINT)
+            await event.answer(text)
         elif isinstance(event, CallbackQuery):
-            await event.answer("Нужно получить доступ: нажмите /start", show_alert=True)
+            await event.answer("Нужно получить доступ: /start", show_alert=True)
+
+    def _denial(self, user: User) -> str:
+        """Отказ говорит, что делать дальше, а не просто «нельзя»."""
+        if not gated(self._settings):
+            # Принимать заявки некому, звать на /start бессмысленно.
+            return _PRIVATE
+        member = self._registry.get(user.id)
+        if member is None:
+            return _INVITE
+        if member.waiting:
+            return _WAITING
+        return _REJECTED
 
 
 def _is_guest_action(event: TelegramObject) -> bool:
-    """Что гостю позволено: поздороваться и подать заявку."""
+    """Что гостю позволено: поздороваться, это же и подаёт заявку."""
     if isinstance(event, Message):
         text = (event.text or "").strip()
         return text == "/start" or text.startswith("/start@")
-    if isinstance(event, CallbackQuery):
-        return (event.data or "").startswith(AccessRequest.__prefix__)
     return False

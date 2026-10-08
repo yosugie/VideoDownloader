@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 import pytest
+from aiogram import Dispatcher
 
 import bot.__main__ as main
 from tests.test_downloader import make_settings
@@ -204,17 +205,13 @@ AIOGRAM_RESERVED = frozenset(
 )
 
 
-def test_dependencies_do_not_shadow_aiogram(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dependencies_do_not_shadow_aiogram(dispatcher: Dispatcher) -> None:
     """
     Наши зависимости не должны называться так же, как внутренние.
 
     Ошибку такого рода не видно ни линтером, ни обычными тестами: бот
     запускается, а падает на каждом событии.
     """
-    monkeypatch.setenv("BOT_TOKEN", "111:test")
-    from bot.config import load_settings
-
-    dispatcher = main.build_dispatcher(load_settings(env_file=None))
     ours = set(dispatcher.workflow_data) - {"dispatcher"}
 
     clashes = ours & AIOGRAM_RESERVED

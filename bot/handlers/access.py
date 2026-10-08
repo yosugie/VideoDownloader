@@ -1,8 +1,10 @@
 """Заявки на доступ.
 
-Гость видит приглашение и кнопку, владелец — заявку с кнопками решения
-и ссылкой на профиль, чтобы знать, кого он пускает. После решения
-человек получает ответ, а запись о нём остаётся в списке.
+Команда ``/start`` для гостя и есть заявка: кнопка «Отправить заявку»
+только добавляла шаг, на котором непонятно, ушло что-нибудь или нет.
+Владелец получает заявку с кнопками решения и ссылкой на профиль, чтобы
+знать, кого он пускает. После решения человек получает ответ, а запись
+о нём остаётся в списке.
 """
 
 from __future__ import annotations
@@ -14,11 +16,11 @@ from html import escape
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandStart, Filter
-from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject, User
 
 from bot.config import Settings
-from bot.keyboards import AccessDecision, AccessRequest, ask_for_access, decide_access
-from bot.services.access import Member, Registry
+from bot.keyboards import AccessDecision, decide_access
+from bot.services.access import Member, Registry, is_allowed
 
 log = logging.getLogger(__name__)
 
@@ -26,61 +28,61 @@ router = Router(name="access")
 
 
 class IsGuest(Filter):
-    """Срабатывает на тех, кто ещё не допущен."""
+    """Срабатывает на тех, кто ещё не допущен.
 
-    async def __call__(self, event: TelegramObject, is_member: bool = True) -> bool:
-        return not is_member
+    Спрашивает тот же ``is_allowed``, что и middleware, а не признак из
+    данных: фильтры выполняются раньше внутренних middleware, и
+    признака там может не оказаться вовсе — тогда гость молча уезжает в
+    обычное приветствие.
+    """
+
+    async def __call__(
+        self,
+        event: TelegramObject,
+        settings: Settings,
+        registry: Registry,
+        event_from_user: User | None = None,
+    ) -> bool:
+        if event_from_user is None:
+            return False
+        return not is_allowed(settings, registry, event_from_user.id)
 
 
 # ── гость ────────────────────────────────────────────────────────────
 
 
 @router.message(CommandStart(), IsGuest())
-async def guest_start(message: Message, registry: Registry) -> None:
-    """Приглашение подать заявку вместо глухого отказа."""
+async def guest_start(
+    message: Message,
+    bot: Bot,
+    settings: Settings,
+    registry: Registry,
+) -> None:
+    """Заявка подаётся самой командой ``/start``."""
     user = message.from_user
     if user is None:
         return
 
-    member = registry.get(user.id)
-    if member is not None and member.waiting:
+    waiting = registry.get(user.id)
+    if waiting is not None and waiting.waiting:
         await message.answer(
-            "⏳ <b>Заявка отправлена</b>\n\n"
-            "Владелец её ещё не рассмотрел. Как решит — я напишу."
+            "⏳ <b>Заявка уже отправлена</b>\n\n"
+            "Владелец её пока не рассмотрел. Как решит — я напишу сюда, "
+            "повторять не нужно."
         )
         return
 
+    member = registry.ask(user.id, user.username, user.full_name)
     await message.answer(
         f"👋 Привет, <b>{escape(user.first_name or 'друг')}</b>!\n\n"
         "Я скачиваю видео и фото из YouTube, Instagram и TikTok.\n\n"
-        "Бот работает по заявкам — так владелец знает, кто им пользуется.\n"
-        "Нажмите кнопку ниже, и он получит вашу заявку.\n\n"
-        f"Ваш Telegram ID: <code>{user.id}</code>",
-        reply_markup=ask_for_access(),
+        "📨 <b>Заявка на доступ отправлена владельцу бота.</b>\n"
+        "Как он её рассмотрит — я сразу напишу сюда. "
+        "Ждать в чате не нужно, можно закрыть.\n\n"
+        f"Ваш Telegram ID: <code>{user.id}</code>"
     )
 
-
-@router.callback_query(AccessRequest.filter(), IsGuest())
-async def guest_asks(
-    callback: CallbackQuery,
-    settings: Settings,
-    registry: Registry,
-) -> None:
-    """Принимает заявку и показывает её владельцу."""
-    user = callback.from_user
-    await callback.answer()
-
-    member = registry.ask(user.id, user.username, user.full_name)
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(TelegramBadRequest):
-            await callback.message.edit_text(
-                "📨 <b>Заявка отправлена</b>\n\n"
-                "Владелец получит её и решит. Как решит — я напишу.",
-                reply_markup=None,
-            )
-
-    delivered = await _tell_admins(callback.bot, settings, member)
-    if not delivered:
+    if not await _tell_admins(bot, settings, member):
         log.error("Заявку некому показать: ни один администратор недоступен")
 
 

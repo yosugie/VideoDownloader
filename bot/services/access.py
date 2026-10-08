@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from bot.config import Settings
+
 log = logging.getLogger(__name__)
 
 _SCHEMA = """
@@ -251,3 +253,37 @@ def _member(row: sqlite3.Row) -> Member:
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+# ── допуск ───────────────────────────────────────────────────────────
+#
+# Ответ на вопрос «пускать ли» живёт здесь один на всех: его спрашивают
+# и middleware, и фильтр гостя. Разойдись они — расхождение означало бы
+# чужой доступ к боту, причём молча.
+
+
+def gated(settings: Settings) -> bool:
+    """Работает ли бот по заявкам.
+
+    Заявки принимает администратор. Нет его — принимать их некому, и
+    бот ведёт себя по-старому, по списку из настроек.
+    """
+    return bool(settings.admin_ids)
+
+
+def is_blocked(settings: Settings, registry: Registry, user_id: int) -> bool:
+    return user_id in settings.blocked_user_ids or registry.blocked(user_id)
+
+
+def is_allowed(settings: Settings, registry: Registry, user_id: int) -> bool:
+    """Допущен ли человек к боту."""
+    if user_id in settings.admin_ids:
+        return True
+    if registry.allowed(user_id):
+        return True
+    if gated(settings):
+        return False
+    # Без администратора список из настроек работает как прежде,
+    # а пустой список означает «бот открыт для всех».
+    allowed = settings.allowed_user_ids
+    return not allowed or user_id in allowed

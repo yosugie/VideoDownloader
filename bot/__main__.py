@@ -89,7 +89,9 @@ def build_dispatcher(settings: Settings) -> Dispatcher:
     access = AccessMiddleware(settings, registry)
     throttling = ThrottlingMiddleware(settings.rate_limit_seconds)
     for observer in (dispatcher.message, dispatcher.callback_query):
-        observer.middleware(access)
+        # Привратник — внешним: внутренний middleware aiogram запускает
+        # уже после фильтров, и фильтр гостя не увидел бы его решения.
+        observer.outer_middleware(access)
         observer.middleware(throttling)
 
     dispatcher.include_router(build_router())

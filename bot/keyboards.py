@@ -14,27 +14,11 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.services.downloader import KIND_AUDIO
 
 
-class AccessRequest(CallbackData, prefix="ask"):
-    """Гость просит доступ."""
-
-
 class AccessDecision(CallbackData, prefix="acc"):
     """Решение владельца по заявке."""
 
     action: str
     user_id: int
-
-
-def ask_for_access() -> InlineKeyboardMarkup:
-    """Единственная кнопка, доступная гостю."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(
-            text="📨 Отправить заявку",
-            callback_data=AccessRequest().pack(),
-        )
-    )
-    return builder.as_markup()
 
 
 def decide_access(user_id: int, profile_url: str | None) -> InlineKeyboardMarkup:

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from aiogram.types import CallbackQuery, Message
+from aiogram import Bot, Dispatcher
+from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 from bot.middlewares.access import AccessMiddleware
 from bot.services.access import APPROVED, BLOCKED, PENDING, Registry
@@ -138,9 +140,10 @@ def test_guest_may_say_start(tmp_path: Path) -> None:
     assert run(middleware, FakeUser(STRANGER), a_message("/start")) is True
 
 
-def test_guest_may_ask_for_access(tmp_path: Path) -> None:
+def test_guest_may_not_press_any_button(tmp_path: Path) -> None:
+    """Заявку подаёт сама команда /start, кнопки для этого нет."""
     middleware = gated(tmp_path, registry_at(tmp_path))
-    assert run(middleware, FakeUser(STRANGER), a_press("ask")) is True
+    assert run(middleware, FakeUser(STRANGER), a_press("ask")) is False
 
 
 def test_guest_may_not_download(tmp_path: Path) -> None:
@@ -201,27 +204,48 @@ def test_event_without_user_passes(tmp_path: Path) -> None:
     assert run(middleware, None) is True
 
 
-# ── что middleware кладёт в данные ─────────────────────────────────────
+# ── отказ говорит, что делать дальше ──────────────────────────────────
 
 
-def test_membership_is_passed_to_handlers(tmp_path: Path) -> None:
-    """По этому признаку обработчик отличает гостя от своего."""
+def test_a_stranger_is_invited_to_apply(tmp_path: Path) -> None:
+    middleware = gated(tmp_path, registry_at(tmp_path))
+    event = a_message("https://youtu.be/abc")
+
+    run(middleware, FakeUser(STRANGER), event)
+    assert "/start" in event.said[0]
+
+
+def test_a_waiting_person_is_told_to_wait(tmp_path: Path) -> None:
+    """Иначе отказ звал бы на /start, который уже нажат, — замкнутый круг."""
     registry = registry_at(tmp_path)
     middleware = gated(tmp_path, registry)
-    seen: dict = {}
+    registry.ask(STRANGER, None, "Вася")
+    event = a_message("https://youtu.be/abc")
 
-    async def handler(event: object, data: dict) -> None:
-        seen.update(data)
+    run(middleware, FakeUser(STRANGER), event)
+    assert "ждёт решения" in event.said[0]
 
-    asyncio.run(
-        middleware(handler, a_message("/start"), {"event_from_user": FakeUser(STRANGER)})
-    )
-    assert seen["is_member"] is False
 
-    asyncio.run(
-        middleware(handler, a_message("/start"), {"event_from_user": FakeUser(OWNER)})
-    )
-    assert seen["is_member"] is True
+def test_a_rejected_person_may_apply_again(tmp_path: Path) -> None:
+    registry = registry_at(tmp_path)
+    middleware = gated(tmp_path, registry)
+    registry.ask(STRANGER, None, "Вася")
+    registry.reject(STRANGER, by=OWNER)
+    event = a_message("https://youtu.be/abc")
+
+    run(middleware, FakeUser(STRANGER), event)
+    assert "отклонил" in event.said[0]
+    assert "/start" in event.said[0]
+
+
+def test_without_admins_nobody_is_invited_to_apply(tmp_path: Path) -> None:
+    """Принимать заявки некому, звать на /start — отправлять по кругу."""
+    settings = make_settings(tmp_path, allowed_user_ids=frozenset({1}))
+    middleware = AccessMiddleware(settings, registry_at(tmp_path))
+    event = a_message("https://youtu.be/abc")
+
+    run(middleware, FakeUser(STRANGER), event)
+    assert "/start" not in event.said[0]
 
 
 # ── само хранилище ─────────────────────────────────────────────────────
@@ -305,3 +329,111 @@ def test_mention_works_without_a_username(tmp_path: Path) -> None:
     """Ссылка на профиль в тексте нужна и тем, у кого имени нет."""
     member = registry_at(tmp_path).ask(55, None, "Петя")
     assert 'href="tg://user?id=55"' in member.mention
+
+
+# ── весь путь через диспетчер ──────────────────────────────────────────
+#
+# Проверки выше поднимают middleware отдельно и ошибку в порядке его
+# подключения увидеть не могут. Она и случилась: привратник стоял
+# внутренним middleware, то есть запускался после фильтров, фильтр
+# гостя не видел его решения — и гость получал обычное приветствие, а
+# на ссылку отказ со словами «нажмите /start». Поэтому путь гостя
+# проверяется целиком, на настоящем диспетчере.
+
+
+def _guest_update(text: str, user_id: int, number: int) -> Update:
+    return Update(
+        update_id=number,
+        message=Message(
+            message_id=number,
+            date=datetime.now(UTC),
+            chat=Chat(id=user_id, type="private"),
+            from_user=User(id=user_id, is_bot=False, first_name="Гость", username="guest"),
+            text=text,
+        ),
+    )
+
+
+@dataclass
+class Talk:
+    """Что бот сказал гостю и что отправил владельцу."""
+
+    said: list[str]
+    sent: list[tuple[int, str]]
+    registry: Registry
+
+
+def _talk(
+    dispatcher: Dispatcher, monkeypatch: pytest.MonkeyPatch, *lines: str
+) -> Talk:
+    """Прогоняет сообщения гостя через настоящий диспетчер бота."""
+    said: list[str] = []
+    sent: list[tuple[int, str]] = []
+
+    async def answer(self: Message, text: str, **kwargs: object) -> None:
+        said.append(text)
+
+    async def send_message(self: Bot, chat_id: int, text: str, **kwargs: object) -> None:
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(Message, "answer", answer)
+    monkeypatch.setattr(Bot, "send_message", send_message)
+
+    registry: Registry = dispatcher.workflow_data["registry"]
+    registry.forget(STRANGER)
+
+    async def feed() -> None:
+        bot = Bot(token="123456789:AAE-no-such-token-this-is-a-test")
+        try:
+            for number, text in enumerate(lines, start=1):
+                await dispatcher.feed_update(bot, _guest_update(text, STRANGER, number))
+        finally:
+            await bot.session.close()
+
+    asyncio.run(feed())
+    return Talk(said, sent, registry)
+
+
+def test_a_guest_saying_start_files_a_request(
+    dispatcher: Dispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    talk = _talk(dispatcher, monkeypatch, "/start")
+
+    assert "Заявка на доступ отправлена" in talk.said[0]
+    assert "Умею" not in talk.said[0], "это обычное приветствие, не гостевое"
+    assert [member.user_id for member in talk.registry.pending()] == [STRANGER]
+
+
+def test_the_owner_sees_the_request_at_once(
+    dispatcher: Dispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    talk = _talk(dispatcher, monkeypatch, "/start")
+
+    assert [chat_id for chat_id, _ in talk.sent] == [OWNER]
+    assert "Новая заявка" in talk.sent[0][1]
+
+
+def test_a_guest_is_not_sent_in_circles(
+    dispatcher: Dispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Старая ошибка: /start давал приветствие, ссылка — «нажмите /start»."""
+    talk = _talk(
+        dispatcher, monkeypatch, "/start", "https://youtu.be/abc", "/start"
+    )
+
+    assert "ждёт решения" in talk.said[1]
+    assert "уже отправлена" in talk.said[2]
+    assert len(talk.registry.pending()) == 1, "вторая заявка владельцу не нужна"
+
+
+def test_the_gate_stands_outside_the_filters(dispatcher: Dispatcher) -> None:
+    """Привратник обязан быть внешним middleware.
+
+    Внутренний запускается после фильтров, и всё, что он положит в
+    данные, фильтрам уже не достаётся.
+    """
+    for observer in (dispatcher.message, dispatcher.callback_query):
+        outer = [type(m).__name__ for m in observer.outer_middleware]
+        inner = [type(m).__name__ for m in observer.middleware]
+        assert "AccessMiddleware" in outer
+        assert "AccessMiddleware" not in inner

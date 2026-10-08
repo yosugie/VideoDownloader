@@ -89,3 +89,50 @@ def test_admin_is_not_limited(tmp_path: Path, worker: Downloader) -> None:
 
 def test_unknown_user_gets_short_version(tmp_path: Path, worker: Downloader) -> None:
     assert "ookies" not in text_for(None, tmp_path, worker)
+
+
+# ── заявки на доступ ───────────────────────────────────────────────────
+
+
+def test_admin_sees_waiting_requests(tmp_path: Path, worker: Downloader) -> None:
+    """Уведомление могло потеряться, поэтому счётчик стоит и в /status."""
+    settings = make_settings(tmp_path, admin_ids=frozenset({ADMIN}))
+    text = status_text(
+        user_id=ADMIN,
+        settings=settings,
+        downloader=worker,
+        quota=DailyQuota(0),
+        people={"approved": 4, "pending": 2},
+    )
+
+    assert "Допущено человек: 4" in text
+    assert "Заявок ждёт решения: 2" in text
+    assert "/requests" in text
+
+
+def test_no_requests_no_line(tmp_path: Path, worker: Downloader) -> None:
+    settings = make_settings(tmp_path, admin_ids=frozenset({ADMIN}))
+    text = status_text(
+        user_id=ADMIN,
+        settings=settings,
+        downloader=worker,
+        quota=DailyQuota(0),
+        people={"approved": 4},
+    )
+
+    assert "Допущено человек: 4" in text
+    assert "Заявок" not in text
+
+
+def test_users_see_nothing_about_requests(tmp_path: Path, worker: Downloader) -> None:
+    settings = make_settings(tmp_path, admin_ids=frozenset({ADMIN}))
+    text = status_text(
+        user_id=STRANGER,
+        settings=settings,
+        downloader=worker,
+        quota=DailyQuota(0),
+        people={"approved": 4, "pending": 2},
+    )
+
+    assert "Допущено" not in text
+    assert "Заявок" not in text

@@ -9,6 +9,7 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import Message
 
 from bot.config import Settings
+from bot.services.access import Registry
 from bot.services.downloader import Downloader
 from bot.services.links import SUPPORTED_PLATFORMS
 from bot.services.stats import Failure, Stats, Summary
@@ -97,8 +98,10 @@ async def cmd_status(
     downloader: Downloader,
     quota: DailyQuota,
     runtime: RuntimeState,
+    registry: Registry,
 ) -> None:
     user = message.from_user
+    counts = registry.counts()
     await message.answer(
         status_text(
             user_id=user.id if user is not None else None,
@@ -106,6 +109,7 @@ async def cmd_status(
             downloader=downloader,
             quota=quota,
             runtime=runtime,
+            people=counts,
         )
     )
 
@@ -117,6 +121,7 @@ def status_text(
     downloader: Downloader,
     quota: DailyQuota,
     runtime: RuntimeState | None = None,
+    people: dict[str, int] | None = None,
 ) -> str:
     """
     Состояние бота.
@@ -157,6 +162,11 @@ def status_text(
             f"Cookies: {cookies}",
             f"Людей за сегодня: {quota.users_today()}",
         ]
+        if people:
+            lines.append(f"Допущено человек: {people.get('approved', 0)}")
+            waiting = people.get("pending", 0)
+            if waiting:
+                lines.append(f"⚠️ Заявок ждёт решения: {waiting} — /requests")
 
     return "\n".join(lines)
 

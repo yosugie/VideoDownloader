@@ -29,6 +29,7 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
         "upload_timeout": 600,
         "download_dir": tmp_path,
         "stats_db": tmp_path / "stats.db",
+        "access_db": tmp_path / "access.db",
         "stats_store_urls": False,
         "allow_any_site": False,
         "cookies_file": None,

@@ -20,6 +20,7 @@ from bot import __version__
 from bot.config import ConfigError, Settings, load_settings
 from bot.handlers import build_router
 from bot.middlewares import AccessMiddleware, ThrottlingMiddleware
+from bot.services.access import Registry
 from bot.services.downloader import Downloader
 from bot.services.photos import PhotoDownloader
 from bot.services.stats import Stats
@@ -69,6 +70,11 @@ def build_dispatcher(settings: Settings) -> Dispatcher:
 
     # Эти объекты aiogram подставит в хендлеры по имени аргумента.
     dispatcher["settings"] = settings
+    registry = Registry(settings.access_db)
+    # Владелец и администраторы допущены изначально: иначе принимать
+    # заявки было бы некому.
+    registry.seed(settings.admin_ids | settings.allowed_user_ids)
+    dispatcher["registry"] = registry
     dispatcher["downloader"] = Downloader(settings)
     dispatcher["photos"] = PhotoDownloader(settings)
     dispatcher["links"] = PendingLinks()
@@ -80,7 +86,7 @@ def build_dispatcher(settings: Settings) -> Dispatcher:
         settings.stats_db, store_urls=settings.stats_store_urls
     )
 
-    access = AccessMiddleware(settings.allowed_user_ids, settings.blocked_user_ids)
+    access = AccessMiddleware(settings, registry)
     throttling = ThrottlingMiddleware(settings.rate_limit_seconds)
     for observer in (dispatcher.message, dispatcher.callback_query):
         observer.middleware(access)

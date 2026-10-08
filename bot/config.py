@@ -83,6 +83,7 @@ class Settings:
     upload_timeout: int
     download_dir: Path
     stats_db: Path
+    access_db: Path
     stats_store_urls: bool
     allow_any_site: bool
     cookies_file: Path | None
@@ -153,6 +154,7 @@ def load_settings(env_file: str | os.PathLike[str] | None = ".env") -> Settings:
         rate_limit_seconds=float(_env_int("RATE_LIMIT_SECONDS", 2, minimum=0)),
         download_dir=download_dir,
         stats_db=_env_path("STATS_DB") or Path("stats.db"),
+        access_db=_env_path("ACCESS_DB") or Path("access.db"),
         stats_store_urls=_env_bool("STATS_STORE_URLS", False),
         allow_any_site=_env_bool("ALLOW_ANY_SITE", False),
         cookies_file=cookies_file,

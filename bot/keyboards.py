@@ -14,6 +14,47 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.services.downloader import KIND_AUDIO
 
 
+class AccessRequest(CallbackData, prefix="ask"):
+    """Гость просит доступ."""
+
+
+class AccessDecision(CallbackData, prefix="acc"):
+    """Решение владельца по заявке."""
+
+    action: str
+    user_id: int
+
+
+def ask_for_access() -> InlineKeyboardMarkup:
+    """Единственная кнопка, доступная гостю."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="📨 Отправить заявку",
+            callback_data=AccessRequest().pack(),
+        )
+    )
+    return builder.as_markup()
+
+
+def decide_access(user_id: int, profile_url: str | None) -> InlineKeyboardMarkup:
+    """Принять, отклонить и заглянуть в профиль."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✅ Принять",
+            callback_data=AccessDecision(action="approve", user_id=user_id).pack(),
+        ),
+        InlineKeyboardButton(
+            text="❌ Отклонить",
+            callback_data=AccessDecision(action="reject", user_id=user_id).pack(),
+        ),
+    )
+    if profile_url:
+        builder.row(InlineKeyboardButton(text="👤 Профиль", url=profile_url))
+    return builder.as_markup()
+
+
 class DownloadAction(CallbackData, prefix="dl"):
     """Нажатие на запасную кнопку скачивания."""
 
